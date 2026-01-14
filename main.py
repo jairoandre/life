@@ -2,6 +2,9 @@ import os
 import sys
 import numpy as np
 import math
+import json
+import tkinter as tk
+from tkinter import filedialog
 
 import moderngl
 import pygame
@@ -20,17 +23,13 @@ BLACK = (0, 0, 0)
 
 # SIMULATION PARAMS
 
-NUM_PARTICLES = 10000 
+INITIAL_NUM_PARTICLES = 1_000 
+MAX_NUM_PARTICLES = 200_000
 NUM_TYPE_OF_PARTICLES = 4
 BETA = 0.15 
-R_MAX = 0.02 
 FRICTION_RATE = 0.040
 DT = 0.015
-
-# Derived Grid Params
-GRID_CELL_SIZE = R_MAX
-GRID_WIDTH = int(math.ceil(1.0 / GRID_CELL_SIZE))
-NUM_CELLS = GRID_WIDTH * GRID_WIDTH
+ZOOM_FACTOR = 0.3
 
 # SHADER PARAMS
 GROUP_SIZE = 64
@@ -91,74 +90,147 @@ class Scene:
         self.build_grid_shader = self.ctx.compute_shader(load_shader("build_grid.glsl"))
 
         self.beta = BETA
-        self.r_max = R_MAX
         self.friction = np.power(0.5, DT / FRICTION_RATE, dtype="f4")
         self.dt = DT
+        self.num_types = NUM_TYPE_OF_PARTICLES
+        self.num_particles = INITIAL_NUM_PARTICLES
+        self.adding_particles = False
+        self.removing_particles = False
 
-        # Set Uniforms
-        self.compute_shader["num_particles"] = NUM_PARTICLES
-        self.compute_shader["beta"] = self.beta
-        self.compute_shader["r_max"] = self.r_max
-        self.compute_shader["friction_rate"] = self.friction
-        self.compute_shader["dt"] = self.dt
-        self.compute_shader["grid_width"] = GRID_WIDTH
-
-        self.build_grid_shader["num_particles"] = NUM_PARTICLES
-        self.build_grid_shader["grid_width"] = GRID_WIDTH
+        # Initialize Buffers (MAX SIZE)
+        self.init_buffers()
         
-        self.clear_grid_shader["num_cells"] = NUM_CELLS
-
-        # Initialize positions, velocities and particle types
-        positions = np.random.uniform(0.0, 1.0, size=(NUM_PARTICLES, 2)).astype("f4")
-        velocities = np.zeros((NUM_PARTICLES, 2)).astype("f4")
-        self.particle_types = np.random.choice(
-            range(NUM_TYPE_OF_PARTICLES), size=(NUM_PARTICLES, 1)
-        ).astype(int)
-
-        # Create buffers
-        self.gen_force_matrix()
-
-        self.pos_buffer1 = self.ctx.buffer(positions.tobytes())
-        self.pos_buffer2 = self.ctx.buffer(positions.tobytes())
-        self.vel_buffer = self.ctx.buffer(velocities.tobytes())
-        self.types_buffer = self.ctx.buffer(self.particle_types.tobytes())
+        # Initialize Uniforms and Grid infrastructure
+        self.update_simulation_params()
         
-        # Grid Buffers
-        # Initialize grid_head with -1
-        grid_head_init = np.full(NUM_CELLS, -1, dtype="i4")
-        self.grid_head_buffer = self.ctx.buffer(grid_head_init.tobytes())
-        
-        # Particle Next buffer (uninitialized is fine, but lets zero it)
-        self.particle_next_buffer = self.ctx.buffer(reserve=NUM_PARTICLES * 4) # 4 bytes per int
-
-        self.gen_colors()
-
-        # Bindings
-        # 0: Force Matrix (Image) - Bound in gen_force_matrix
-        # 1: Particle Types
-        self.types_buffer.bind_to_storage_buffer(1)
-        # 2: Velocities
-        self.vel_buffer.bind_to_storage_buffer(2)
-        # 3, 4: Positions (Swapped per frame)
-        # 5: Grid Head
-        self.grid_head_buffer.bind_to_storage_buffer(5)
-        # 6: Particle Next
-        self.particle_next_buffer.bind_to_storage_buffer(6)
-
-        # Compute Group Sizes
-        self.x_wg = NUM_PARTICLES // GROUP_SIZE
-        if self.x_wg == 0 or NUM_PARTICLES % GROUP_SIZE > 0:
-            self.x_wg += 1
-            
-        self.grid_wg = NUM_CELLS // GROUP_SIZE
-        if self.grid_wg == 0 or NUM_CELLS % GROUP_SIZE > 0:
-            self.grid_wg += 1
+        # Fill Initial Particles
+        self.fill_initial_particles()
 
         self.clock = pygame.time.Clock()
         self.delta_time = 0.0
         self.running = True
         
         self.ui_texture = self.ctx.texture((WIDTH, HEIGHT), 4)
+
+    def init_buffers(self):
+        # We assume positions and velocities are 2 floats (8 bytes)
+        # Type is 1 int (4 bytes)
+        # Color is 1 float (hue) or 3 for rgb? Fragment shader usually takes hue or RGB. 
+        # previous code used '1f' for in_color, so it is Hue.
+        
+        # Create full sized buffers, but we will mostly write to them dynamically or initially
+        self.pos_buffer1 = self.ctx.buffer(reserve=MAX_NUM_PARTICLES * 8) # 2 floats
+        self.pos_buffer2 = self.ctx.buffer(reserve=MAX_NUM_PARTICLES * 8)
+        self.vel_buffer = self.ctx.buffer(reserve=MAX_NUM_PARTICLES * 8)
+        self.types_buffer = self.ctx.buffer(reserve=MAX_NUM_PARTICLES * 4) # 1 int
+        self.colors_buffer = self.ctx.buffer(reserve=MAX_NUM_PARTICLES * 4) # 1 float (4 bytes)
+        
+        self.particle_next_buffer = self.ctx.buffer(reserve=MAX_NUM_PARTICLES * 4) # 1 int
+
+        self.gen_force_matrix()
+        
+        # Bindings
+        self.types_buffer.bind_to_storage_buffer(1)
+        self.vel_buffer.bind_to_storage_buffer(2)
+        self.particle_next_buffer.bind_to_storage_buffer(6)
+        
+        # We need to generate base colors for types to pick from later
+        self.base_type_colors = np.random.rand(self.num_types).astype("f4")
+
+
+    def update_simulation_params(self):
+        # Recalculate R_MAX based on user formula
+        self.r_max = min(0.1, 1000.0 / self.num_particles) if self.num_particles > 0 else 0.1
+        
+        # Recalculate Grid
+        self.grid_cell_size = self.r_max
+        self.grid_width = int(math.ceil(1.0 / self.grid_cell_size))
+        self.num_cells = self.grid_width * self.grid_width
+        
+        # Update Uniforms
+        self.compute_shader["num_particles"] = self.num_particles
+        self.compute_shader["beta"] = self.beta
+        self.compute_shader["r_max"] = self.r_max
+        self.compute_shader["friction_rate"] = self.friction
+        self.compute_shader["dt"] = self.dt
+        self.compute_shader["grid_width"] = self.grid_width
+
+        self.build_grid_shader["num_particles"] = self.num_particles
+        self.build_grid_shader["grid_width"] = self.grid_width
+        
+        self.clear_grid_shader["num_cells"] = self.num_cells
+        
+        # Reallocate Grid Head Buffer
+        # This is small enough to reallocate safely
+        grid_head_init = np.full(self.num_cells, -1, dtype="i4")
+        self.grid_head_buffer = self.ctx.buffer(grid_head_init.tobytes())
+        self.grid_head_buffer.bind_to_storage_buffer(5)
+        
+        # Compute Group Sizes
+        self.x_wg = self.num_particles // GROUP_SIZE
+        if self.x_wg == 0 or self.num_particles % GROUP_SIZE > 0:
+            self.x_wg += 1
+            
+        self.grid_wg = self.num_cells // GROUP_SIZE
+        if self.grid_wg == 0 or self.num_cells % GROUP_SIZE > 0:
+            self.grid_wg += 1
+
+    def fill_initial_particles(self):
+        # Fill only the initial count
+        # Generate data
+        positions = np.random.uniform(0.0, 1.0, size=(self.num_particles, 2)).astype("f4")
+        velocities = np.zeros((self.num_particles, 2)).astype("f4")
+        types = np.random.choice(range(self.num_types), size=(self.num_particles)).astype("i4")
+        
+        # Map types to colors
+        colors = np.array([self.base_type_colors[t] for t in types]).astype("f4")
+        
+        # Write to buffers
+        # We write only the size needed
+        self.pos_buffer1.write(positions.tobytes())
+        self.pos_buffer2.write(positions.tobytes())
+        self.vel_buffer.write(velocities.tobytes())
+        self.types_buffer.write(types.tobytes())
+        self.colors_buffer.write(colors.tobytes())
+
+    def add_particle(self):
+        if self.num_particles >= MAX_NUM_PARTICLES:
+            return
+
+        # New index is current num_particles
+        for i in range(100):
+            idx = self.num_particles
+        
+            # Data
+            pos = np.array(np.random.uniform(0.0, 1.0, size=(2,)).astype("f4"))
+            vel = np.array([0.0, 0.0], dtype="f4")
+            p_type = np.random.randint(0, self.num_types, dtype="i4")
+            color = np.array([self.base_type_colors[p_type]], dtype="f4")
+        
+            # Calculate offsets
+            # Float = 4 bytes. Vec2 = 8 bytes.
+            offset_vec2 = idx * 8
+            offset_int = idx * 4
+            offset_float = idx * 4
+        
+            # Write
+            self.pos_buffer1.write(pos.tobytes(), offset=offset_vec2)
+            self.pos_buffer2.write(pos.tobytes(), offset=offset_vec2)
+            self.vel_buffer.write(vel.tobytes(), offset=offset_vec2)
+            self.types_buffer.write(p_type.tobytes(), offset=offset_int)
+            self.colors_buffer.write(color.tobytes(), offset=offset_float)
+        
+            self.num_particles += 1
+        self.update_simulation_params()
+        
+    def remove_particle(self):
+        if self.num_particles <= 0:
+            return
+            
+        self.num_particles -= 100
+        if self.num_particles < 0:
+            self.num_particles = 0
+        self.update_simulation_params()
 
     def setup_ui(self):
         # x, y, w, h, min, max, initial, label
@@ -183,27 +255,94 @@ class Scene:
         self.friction = np.power(0.5, self.dt / f_rate, dtype="f4")
 
         self.compute_shader["beta"] = float(self.beta)
-        # self.compute_shader["r_max"] = self.r_max # R_max not changable yet
+        # self.compute_shader["r_max"] = self.r_max # R_max controlled by particle logic
         self.compute_shader["friction_rate"] = self.friction
         self.compute_shader["dt"] = self.dt
 
     def gen_force_matrix(self):
-        matrix_size = (NUM_TYPE_OF_PARTICLES, NUM_TYPE_OF_PARTICLES)
-        force_matrix = np.random.uniform(-1.0, 1.0, matrix_size).astype("f4")
-        force_texture = self.ctx.texture(matrix_size, 1, dtype="f4")
-        force_texture.write(force_matrix.tobytes())
-        force_texture.bind_to_image(0)
+        matrix_size = (self.num_types, self.num_types)
+        self.force_matrix = np.random.uniform(-1.0, 1.0, matrix_size).astype("f4")
+        self.force_texture = self.ctx.texture(matrix_size, 1, dtype="f4")
+        self.force_texture.write(self.force_matrix.tobytes())
+        self.force_texture.bind_to_image(0)
 
     def gen_colors(self):
-        random_colors = np.random.rand(NUM_TYPE_OF_PARTICLES)
-        colors = np.array(
-            [[random_colors[c] for c in self.particle_types.T[0]]]
-        ).T.astype("f4")
-        self.colors_buffer = self.ctx.buffer(colors.tobytes())
+        types = np.random.choice(range(self.num_types), size=(self.num_particles)).astype("i4")
+        colors = np.array([self.base_type_colors[t] for t in types]).astype("f4")
+        self.colors_buffer.write(colors.tobytes())
+        
+    def save_config(self):
+        root = tk.Tk()
+        root.withdraw()
+        filename = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON files", "*.json")])
+        root.destroy()
+        
+        if not filename:
+            return
+
+        data = {
+            "parameters": {
+                "beta": float(self.beta),
+                # "r_max": float(self.r_max), # Derived
+                "friction_values": { 
+                    "rate": float(self.slider_friction.value), 
+                    "dt": float(self.dt)
+                },
+                "num_types": int(self.num_types)
+            },
+            "force_matrix": self.force_matrix.tolist(),
+            "base_type_colors": self.base_type_colors.tolist()
+        }
+        
+        with open(filename, 'w') as f:
+            json.dump(data, f, indent=4)
+        print(f"Saved config to {filename}")
+
+    def load_config(self):
+        root = tk.Tk()
+        root.withdraw()
+        filename = filedialog.askopenfilename(filetypes=[("JSON files", "*.json")])
+        root.destroy()
+        
+        if not filename:
+            return
+
+        with open(filename, 'r') as f:
+            data = json.load(f)
+            
+        params = data["parameters"]
+        
+        # Load Parameters
+        self.beta = params["beta"]
+        
+        # Update sliders
+        self.slider_beta.value = self.beta
+        self.slider_friction.value = params["friction_values"]["rate"]
+        self.slider_dt.value = params["friction_values"]["dt"]
+        
+        # Force Matrix
+        self.force_matrix = np.array(data["force_matrix"], dtype="f4")
+        self.num_types = len(self.force_matrix)
+        
+        self.force_texture.write(self.force_matrix.tobytes())
+        
+        # Colors
+        self.base_type_colors = np.array(data["base_type_colors"], dtype="f4")
+        
+        # Re-generate particle colors for *current* types
+        # Reading types buffer
+        types_data = self.types_buffer.read(size=self.num_particles * 4)
+        types = np.frombuffer(types_data, dtype="i4")
+        
+        # Map to new colors
+        colors = np.array([self.base_type_colors[t] for t in types]).astype("f4")
+        self.colors_buffer.write(colors.tobytes())
+        
+        print(f"Loaded config from {filename}")
+
 
     def render(self):
         self.display.fill((0, 0, 0))
-        # self.delta_time = self.clock.tick(60) / 1000
 
         if not self.pause:
             
@@ -239,19 +378,14 @@ class Scene:
         self.ctx.clear()
         
         # 1. Render Particles
-        gl.glEnable(gl.GL_BLEND)
-        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE) # Additive blending for cool look? Or standard. Let's do standard for now or disable for performance.
-        # Actually, standard depth test is off, so order matters if alpha. But particles are opaque points usually.
-        # Let's disable blend for particles for speed.
-        gl.glDisable(gl.GL_BLEND)
-
         pos_buffer = self.pos_buffer2 if self.use_first_buffer_set else self.pos_buffer1
         
+        # Render only active particles
         vao = self.ctx.vertex_array(
             self.program,
             [(pos_buffer, "2f", "in_position"), (self.colors_buffer, "1f", "in_color")],
         )
-        vao.render(moderngl.POINTS)
+        vao.render(moderngl.POINTS, vertices=self.num_particles)
         
         # 2. Render UI
         ui_surf = self.ui_manager.draw()
@@ -264,7 +398,7 @@ class Scene:
         self.quad_vao.render(moderngl.TRIANGLE_STRIP)
         
         # Draw FPS
-        pygame.display.set_caption(f"Particle Life - FPS: {self.clock.get_fps():.2f} - Particles: {NUM_PARTICLES}")
+        pygame.display.set_caption(f"Particle Life - FPS: {self.clock.get_fps():.2f} - Particles: {self.num_particles}")
         self.clock.tick()
 
         pygame.display.flip()
@@ -274,8 +408,6 @@ class Scene:
         self.display = pygame.display.set_mode(
             size, flags=pygame.OPENGL | pygame.DOUBLEBUF | pygame.RESIZABLE, vsync=True
         )
-        # Update UI manager size
-        # Recreate texture?
         self.ui_manager.width = w
         self.ui_manager.height = h
         self.ui_manager.surface = pygame.Surface((w, h), pygame.SRCALPHA)
@@ -294,20 +426,17 @@ class Scene:
                 elif event.type == pygame.VIDEORESIZE:
                     self.resize(event.w, event.h)
                 elif event.type == pygame.MOUSEWHEEL:
-                    self.zoom += 0.1 * event.y
-                    if self.zoom < 0.1:
-                        self.zoom = 0.1
+                    self.zoom += ZOOM_FACTOR * event.y
+                    if self.zoom < ZOOM_FACTOR * 0.1:
+                        self.zoom = ZOOM_FACTOR * 0.1
                     self.program["zoom"].value = self.zoom
                 elif event.type == pygame.MOUSEBUTTONDOWN:
-                    if not self.ui_manager.sliders[0].dragging: # Hacky check if UI is using it
-                         # We should probably check if event was consumed properly
-                         pass
-                    
-                    # Logic to drag screen
-                    if event.button == 1:
-                        # Check collision with UI?
-                        # For now, if UI didn't take it (handled inside UI check above? No, UI returns True if updated)
-                        # Let's improve UI handling logic later.
+                    slider_dragging = False
+                    for slider in self.ui_manager.sliders:
+                        if slider.dragging:
+                            slider_dragging = True
+                            break
+                    if event.button == 1 and not slider_dragging:
                         self.dragging = True
                         x, y = event.pos
                         self.previous_pos = np.array([x, y])
@@ -315,14 +444,7 @@ class Scene:
                     if event.button == 1:
                         self.dragging = False
                 elif event.type == pygame.MOUSEMOTION:
-                    if self.dragging:
-                         # Simplified: Disable screen drag if interacting with UI sliders
-                         # But dragging is False in slider.
-                         # Need to ensure we don't drag screen when dragging slider.
-                         # Since UI `handle_event` returns True, we can use that.
-                         pass
-                    
-                    if self.dragging:
+                   if self.dragging:
                         x, y = event.pos
                         current_pos = np.array([x, y])
                         delta = current_pos - self.previous_pos
@@ -335,10 +457,30 @@ class Scene:
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_a:
                         self.gen_force_matrix()
-                    elif event.key == pygame.K_c:
-                        self.gen_colors()
                     elif event.key == pygame.K_p:
                         self.pause = not self.pause
+                    elif event.key == pygame.K_r:
+                        self.zoom = 1.0
+                        self.program["zoom"].value = self.zoom
+                    elif event.key == pygame.K_c:
+                        self.gen_colors()
+                    elif event.key == pygame.K_s:
+                        self.save_config()
+                    elif event.key == pygame.K_l:
+                        self.load_config()
+                    elif event.key == pygame.K_x:
+                        self.adding_particles = True
+                    elif event.key == pygame.K_z:
+                        self.removing_particles = True
+                elif event.type == pygame.KEYUP:
+                    if event.key == pygame.K_x:
+                        self.adding_particles = False
+                    elif event.key == pygame.K_z:
+                        self.removing_particles = False
+            if self.adding_particles:
+                self.add_particle()
+            if self.removing_particles:
+                self.remove_particle()  
             self.render()
         print("Closing...")
         pygame.quit()
