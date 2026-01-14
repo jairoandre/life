@@ -28,7 +28,7 @@ MAX_NUM_PARTICLES = 200_000
 NUM_TYPE_OF_PARTICLES = 3
 BETA = 0.15 
 FRICTION_RATE = 0.040
-DT = 0.015
+DT = 0.005
 ZOOM_FACTOR = 0.1
 
 # SHADER PARAMS
@@ -89,6 +89,11 @@ class Scene:
             1.0, -1.0, 1.0, 1.0,  # BR
         ], dtype='f4').tobytes())
         self.quad_vao = self.ctx.vertex_array(self.ui_program, [(self.quad_fs, '2f 2f', 'in_vert', 'in_uv')])
+        
+        # Post Processor VAOs
+        self.quad_fs_blur = self.ctx.vertex_array(self.blur_program, [(self.quad_fs, '2f 2f', 'in_vert', 'in_uv')])
+        self.quad_fs_composite = self.ctx.vertex_array(self.composite_program, [(self.quad_fs, '2f 2f', 'in_vert', 'in_uv')])
+
 
 
         self.program["zoom"] = self.zoom
@@ -168,6 +173,16 @@ class Scene:
         
         # We need to generate base colors for types to pick from later
         self.base_type_colors = np.random.rand(self.num_types).astype("f4")
+
+        # Pre-create Particle VAOs for both buffers
+        self.vao_particles_1 = self.ctx.vertex_array(
+            self.program,
+            [(self.pos_buffer1, "2f", "in_position"), (self.colors_buffer, "1f", "in_color")],
+        )
+        self.vao_particles_2 = self.ctx.vertex_array(
+            self.program,
+            [(self.pos_buffer2, "2f", "in_position"), (self.colors_buffer, "1f", "in_color")],
+        )
 
 
     def update_simulation_params(self):
@@ -409,15 +424,17 @@ class Scene:
 
         
         # 1. Render Particles
-        pos_buffer = self.pos_buffer2 if self.use_first_buffer_set else self.pos_buffer1
+        # 1. Render Particles
+        # Select the VAO that uses the current 'source' buffer (which contains the updated positions to render)
+        # In the render logic: 
+        # Simulation: Read from `pos_in`, Write to `pos_out`.
+        # So the NEW positions are in `pos_out`. 
+        # We want to render `pos_out`.
+        # Earlier: pos_buffer = self.pos_buffer2 if self.use_first_buffer_set else self.pos_buffer1
+        # logic: if use_first_buffer_set is true, we just calculated computing from 1 -> 2. So 2 has the result.
         
-        # Render only active particles
-        vao = self.ctx.vertex_array(
-            self.program,
-            [(pos_buffer, "2f", "in_position"), (self.colors_buffer, "1f", "in_color")],
-        )
-
-        vao.render(moderngl.POINTS, vertices=self.num_particles)
+        current_vao = self.vao_particles_2 if self.use_first_buffer_set else self.vao_particles_1
+        current_vao.render(moderngl.POINTS, vertices=self.num_particles)
         
         # Render Pass 2: Blur
         # Horizontal
@@ -425,7 +442,9 @@ class Scene:
         horizontal = True
         first_iteration = True
         
-        self.quad_fs_blur = self.ctx.vertex_array(self.blur_program, [(self.quad_fs, '2f 2f', 'in_vert', 'in_uv')])
+        
+        # self.quad_fs_blur is pre-created
+
         
         for i in range(amount):
             self.pingpong_fbos[int(horizontal)].use()
@@ -455,7 +474,7 @@ class Scene:
         self.composite_program['bloom_blur'] = 1
         self.composite_program['bloom_strength'] = glow_val
         
-        self.quad_fs_composite = self.ctx.vertex_array(self.composite_program, [(self.quad_fs, '2f 2f', 'in_vert', 'in_uv')])
+        
         self.quad_fs_composite.render(moderngl.TRIANGLE_STRIP)
         
         # 2. Render UI
@@ -532,7 +551,7 @@ class Scene:
                         self.offset += delta
                         self.previous_pos = current_pos
                         normalized = np.array(
-                            [self.offset[0] / WIDTH, -self.offset[1] / HEIGHT]
+                            [self.offset[0] / WIDTH, self.offset[1] / HEIGHT]
                         )
                         self.program["offset"].value = normalized
                 elif event.type == pygame.KEYDOWN:
