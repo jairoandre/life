@@ -70,6 +70,16 @@ class Scene:
             vertex_shader=load_shader("ui_vertex.glsl"),
             fragment_shader=load_shader("ui_fragment.glsl"),
         )
+        
+        # Post Processing Programs
+        self.blur_program = self.ctx.program(
+            vertex_shader=load_shader("blur_vertex.glsl"),
+            fragment_shader=load_shader("blur_fragment.glsl"),
+        )
+        self.composite_program = self.ctx.program(
+            vertex_shader=load_shader("composite_vertex.glsl"),
+            fragment_shader=load_shader("composite_fragment.glsl"),
+        )
         # Fullscreen quad for UI
         self.quad_fs = self.ctx.buffer(np.array([
             # x, y, u, v
@@ -113,6 +123,26 @@ class Scene:
         self.running = True
         
         self.ui_texture = self.ctx.texture((WIDTH, HEIGHT), 4)
+
+        # FBO Setup
+        self.init_fbo(WIDTH, HEIGHT)
+
+    def init_fbo(self, w, h):
+        # Scene FBO
+        self.scene_texture = self.ctx.texture((w, h), 4)
+        self.scene_fbo = self.ctx.framebuffer(color_attachments=[self.scene_texture])
+        
+        # Ping Pong FBOs for Blur (Downscale by 2 for performance and larger glow radius effect)
+        blur_w, blur_h = w // 2, h // 2
+        
+        self.pingpong_textures = [
+            self.ctx.texture((blur_w, blur_h), 4),
+            self.ctx.texture((blur_w, blur_h), 4)
+        ]
+        self.pingpong_fbos = [
+            self.ctx.framebuffer(color_attachments=[self.pingpong_textures[0]]),
+            self.ctx.framebuffer(color_attachments=[self.pingpong_textures[1]])
+        ]
 
     def init_buffers(self):
         # We assume positions and velocities are 2 floats (8 bytes)
@@ -363,7 +393,12 @@ class Scene:
 
             self.use_first_buffer_set = not self.use_first_buffer_set
 
-        self.ctx.clear()
+
+
+        # Render Pass 1: Render Scene to FBO
+        self.scene_fbo.use()
+        self.scene_fbo.clear(0, 0, 0, 0) # Clear with transparent black
+
         
         # 1. Render Particles
         pos_buffer = self.pos_buffer2 if self.use_first_buffer_set else self.pos_buffer1
@@ -373,7 +408,44 @@ class Scene:
             self.program,
             [(pos_buffer, "2f", "in_position"), (self.colors_buffer, "1f", "in_color")],
         )
+
         vao.render(moderngl.POINTS, vertices=self.num_particles)
+        
+        # Render Pass 2: Blur
+        # Horizontal
+        amount = 10 # Blur iterations
+        horizontal = True
+        first_iteration = True
+        
+        self.quad_fs_blur = self.ctx.vertex_array(self.blur_program, [(self.quad_fs, '2f 2f', 'in_vert', 'in_uv')])
+        
+        for i in range(amount):
+            self.pingpong_fbos[int(horizontal)].use()
+            self.blur_program['horizontal'] = horizontal
+            
+            if first_iteration:
+                self.scene_texture.use(location=0)
+            else:
+                self.pingpong_textures[int(not horizontal)].use(location=0)
+                
+            self.quad_fs_blur.render(moderngl.TRIANGLE_STRIP)
+            horizontal = not horizontal
+            if first_iteration:
+                first_iteration = False
+                
+        # Render Pass 3: Composite to Screen
+        self.ctx.screen.use()
+        self.ctx.clear()
+        
+        self.scene_texture.use(location=0) # Original scene
+        self.pingpong_textures[int(not horizontal)].use(location=1) # Blurred bloom
+        
+        self.composite_program['scene'] = 0
+        self.composite_program['bloom_blur'] = 1
+        self.composite_program['bloom_strength'] = 3.0
+        
+        self.quad_fs_composite = self.ctx.vertex_array(self.composite_program, [(self.quad_fs, '2f 2f', 'in_vert', 'in_uv')])
+        self.quad_fs_composite.render(moderngl.TRIANGLE_STRIP)
         
         # 2. Render UI
         ui_surf = self.ui_manager.draw()
@@ -392,14 +464,24 @@ class Scene:
         pygame.display.flip()
 
     def resize(self, w, h):
-        size = (w, h)
-        self.display = pygame.display.set_mode(
-            size, flags=pygame.OPENGL | pygame.DOUBLEBUF | pygame.RESIZABLE, vsync=True
-        )
+        # Update Viewport
+        self.ctx.viewport = (0, 0, w, h)
+        
+        # NOTE: calling pygame.display.set_mode on resize with OPENGL usually isn't necessary 
+        # for moderngl to work, but it updates pygame's internal surface.
+        # However, it implies context destruction on some OS. 
+        # For now, we rely on the event.w/h which are accurate.
+        
         self.ui_manager.width = w
         self.ui_manager.height = h
+        
+        # Recreate UI Surface and Texture
         self.ui_manager.surface = pygame.Surface((w, h), pygame.SRCALPHA)
         self.ui_texture = self.ctx.texture((w, h), 4)
+        
+        # Recreate FBOs to match new size
+        self.init_fbo(w, h)
+
 
 
     def run(self):
