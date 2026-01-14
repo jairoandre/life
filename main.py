@@ -11,7 +11,7 @@ import pygame
 import OpenGL.GL as gl
 import array
 
-from utils.ui import UIManager, Slider
+from utils.ui import UIManager, Slider, Switch
 
 os.environ["SDL_WINDOWS_DPI_AWARENESS"] = "permonitorv2"
 
@@ -29,7 +29,7 @@ NUM_TYPE_OF_PARTICLES = 4
 BETA = 0.15 
 FRICTION_RATE = 0.040
 DT = 0.015
-ZOOM_FACTOR = 0.3
+ZOOM_FACTOR = 0.1
 
 # SHADER PARAMS
 GROUP_SIZE = 64
@@ -257,7 +257,16 @@ class Scene:
         
         # DT
         self.slider_dt = Slider(20, 120, 200, 20, 0.001, 0.05, DT, "Delta Time")
+        self.slider_dt = Slider(20, 120, 200, 20, 0.001, 0.05, DT, "Delta Time")
         self.ui_manager.add_slider(self.slider_dt)
+        
+        # GLOW SWITCH
+        self.switch_glow = Switch(20, 170, 60, 30, True, "Glow")
+        self.ui_manager.add_switch(self.switch_glow)
+        
+        # GLOW INTENSITY
+        self.slider_glow = Slider(100, 170, 120, 20, 0.0, 30.0, 3.0, "Intensity")
+        self.ui_manager.add_slider(self.slider_glow)
 
     def update_compute_shader_uniforms(self):
         # Read from UI
@@ -440,9 +449,12 @@ class Scene:
         self.scene_texture.use(location=0) # Original scene
         self.pingpong_textures[int(not horizontal)].use(location=1) # Blurred bloom
         
+        # Glow Intensity from Switch and Slider
+        glow_val = self.slider_glow.value if self.switch_glow.state else 0.0
+
         self.composite_program['scene'] = 0
         self.composite_program['bloom_blur'] = 1
-        self.composite_program['bloom_strength'] = 3.0
+        self.composite_program['bloom_strength'] = glow_val
         
         self.quad_fs_composite = self.ctx.vertex_array(self.composite_program, [(self.quad_fs, '2f 2f', 'in_vert', 'in_uv')])
         self.quad_fs_composite.render(moderngl.TRIANGLE_STRIP)
