@@ -96,6 +96,8 @@ class Scene:
         self.num_particles = INITIAL_NUM_PARTICLES
         self.adding_particles = False
         self.removing_particles = False
+        self.increase_force = False
+        self.decrease_force = False
 
         # Initialize Buffers (MAX SIZE)
         self.init_buffers()
@@ -178,59 +180,40 @@ class Scene:
     def fill_initial_particles(self):
         # Fill only the initial count
         # Generate data
-        positions = np.random.uniform(0.0, 1.0, size=(self.num_particles, 2)).astype("f4")
-        velocities = np.zeros((self.num_particles, 2)).astype("f4")
-        types = np.random.choice(range(self.num_types), size=(self.num_particles)).astype("i4")
+        self.positions = np.random.uniform(0.0, 1.0, size=(MAX_NUM_PARTICLES, 2)).astype("f4")
+        self.velocities = np.zeros((MAX_NUM_PARTICLES, 2)).astype("f4")
+        self.types = np.random.choice(range(self.num_types), size=(MAX_NUM_PARTICLES)).astype("i4")
         
         # Map types to colors
-        colors = np.array([self.base_type_colors[t] for t in types]).astype("f4")
+        self.colors = np.array([self.base_type_colors[t] for t in self.types]).astype("f4")
         
         # Write to buffers
         # We write only the size needed
-        self.pos_buffer1.write(positions.tobytes())
-        self.pos_buffer2.write(positions.tobytes())
-        self.vel_buffer.write(velocities.tobytes())
-        self.types_buffer.write(types.tobytes())
-        self.colors_buffer.write(colors.tobytes())
+        self.pos_buffer1.write(self.positions.tobytes())
+        self.pos_buffer2.write(self.positions.tobytes())
+        self.vel_buffer.write(self.velocities.tobytes())
+        self.types_buffer.write(self.types.tobytes())
+        self.colors_buffer.write(self.colors.tobytes())
 
     def add_particle(self):
         if self.num_particles >= MAX_NUM_PARTICLES:
             return
-
-        # New index is current num_particles
-        for i in range(100):
-            idx = self.num_particles
-        
-            # Data
-            pos = np.array(np.random.uniform(0.0, 1.0, size=(2,)).astype("f4"))
-            vel = np.array([0.0, 0.0], dtype="f4")
-            p_type = np.random.randint(0, self.num_types, dtype="i4")
-            color = np.array([self.base_type_colors[p_type]], dtype="f4")
-        
-            # Calculate offsets
-            # Float = 4 bytes. Vec2 = 8 bytes.
-            offset_vec2 = idx * 8
-            offset_int = idx * 4
-            offset_float = idx * 4
-        
-            # Write
-            self.pos_buffer1.write(pos.tobytes(), offset=offset_vec2)
-            self.pos_buffer2.write(pos.tobytes(), offset=offset_vec2)
-            self.vel_buffer.write(vel.tobytes(), offset=offset_vec2)
-            self.types_buffer.write(p_type.tobytes(), offset=offset_int)
-            self.colors_buffer.write(color.tobytes(), offset=offset_float)
-        
-            self.num_particles += 1
+        self.num_particles += 100
         self.update_simulation_params()
         
     def remove_particle(self):
         if self.num_particles <= 0:
             return
-            
         self.num_particles -= 100
         if self.num_particles < 0:
             self.num_particles = 0
         self.update_simulation_params()
+    
+    def do_increase_force(self):
+        self.apply_force_matrix(0.001)
+    
+    def do_decrease_force(self):
+        self.apply_force_matrix(-0.001)
 
     def setup_ui(self):
         # x, y, w, h, min, max, initial, label
@@ -262,13 +245,18 @@ class Scene:
     def gen_force_matrix(self):
         matrix_size = (self.num_types, self.num_types)
         self.force_matrix = np.random.uniform(-1.0, 1.0, matrix_size).astype("f4")
+        self.apply_force_matrix()
+    
+    def apply_force_matrix(self, force = 0.0):
+        matrix_size = (self.num_types, self.num_types)
+        self.force_matrix += force
         self.force_texture = self.ctx.texture(matrix_size, 1, dtype="f4")
         self.force_texture.write(self.force_matrix.tobytes())
         self.force_texture.bind_to_image(0)
 
     def gen_colors(self):
-        types = np.random.choice(range(self.num_types), size=(self.num_particles)).astype("i4")
-        colors = np.array([self.base_type_colors[t] for t in types]).astype("f4")
+        self.base_type_colors = np.random.rand(self.num_types).astype("f4")
+        colors = np.array([self.base_type_colors[t] for t in self.types]).astype("f4")
         self.colors_buffer.write(colors.tobytes())
         
     def save_config(self):
@@ -472,15 +460,27 @@ class Scene:
                         self.adding_particles = True
                     elif event.key == pygame.K_z:
                         self.removing_particles = True
+                    elif event.key == pygame.K_UP:
+                        self.increase_force = True
+                    elif event.key == pygame.K_DOWN:
+                        self.decrease_force = True
                 elif event.type == pygame.KEYUP:
                     if event.key == pygame.K_x:
                         self.adding_particles = False
                     elif event.key == pygame.K_z:
                         self.removing_particles = False
+                    elif event.key == pygame.K_UP:
+                        self.increase_force = False
+                    elif event.key == pygame.K_DOWN:
+                        self.decrease_force = False
             if self.adding_particles:
                 self.add_particle()
             if self.removing_particles:
                 self.remove_particle()  
+            if self.increase_force:
+                self.do_increase_force()
+            if self.decrease_force:
+                self.do_decrease_force()
             self.render()
         print("Closing...")
         pygame.quit()
