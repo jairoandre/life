@@ -25,7 +25,7 @@ BLACK = (0, 0, 0)
 
 INITIAL_NUM_PARTICLES = 1_000 
 MAX_NUM_PARTICLES = 200_000
-NUM_TYPE_OF_PARTICLES = 4
+NUM_TYPE_OF_PARTICLES = 3
 BETA = 0.15 
 FRICTION_RATE = 0.040
 DT = 0.015
@@ -257,7 +257,6 @@ class Scene:
         
         # DT
         self.slider_dt = Slider(20, 120, 200, 20, 0.001, 0.05, DT, "Delta Time")
-        self.slider_dt = Slider(20, 120, 200, 20, 0.001, 0.05, DT, "Delta Time")
         self.ui_manager.add_slider(self.slider_dt)
         
         # GLOW SWITCH
@@ -349,7 +348,7 @@ class Scene:
         
         # Force Matrix
         self.force_matrix = np.array(data["force_matrix"], dtype="f4")
-        self.num_types = len(self.force_matrix)
+        self.num_types = params["num_types"]
         
         self.force_texture.write(self.force_matrix.tobytes())
         
@@ -558,6 +557,18 @@ class Scene:
                         self.increase_force = True
                     elif event.key == pygame.K_DOWN:
                         self.decrease_force = True
+                    elif event.key == pygame.K_RIGHT:
+                        self.num_types = min(self.num_types + 1, 8)
+                        self.types = np.random.randint(0, self.num_types, self.num_particles)
+                        self.types_buffer.write(self.types.tobytes())
+                        self.gen_colors()
+                        self.gen_force_matrix()
+                    elif event.key == pygame.K_LEFT:
+                        self.num_types = max(self.num_types - 1, 2)
+                        self.types = np.random.randint(0, self.num_types, self.num_particles)
+                        self.types_buffer.write(self.types.tobytes())
+                        self.gen_colors()
+                        self.gen_force_matrix()
                 elif event.type == pygame.KEYUP:
                     if event.key == pygame.K_x:
                         self.adding_particles = False

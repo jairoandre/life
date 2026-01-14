@@ -68,6 +68,8 @@ python main.py
 | **R** | Reset zoom and camera position |
 | **S** | Save current configuration (params, forces, colors) to JSON |
 | **L** | Load configuration from JSON |
+| **RIGHT** | Increase number of colors (max 8) |
+| **LEFT** | Decrease number of colors (min 2) |
 | **Hold X** | spawns particles |
 | **Hold Z** | remove particles |
 | **Hold UP** | Increase global force strength |
