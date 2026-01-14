@@ -1,5 +1,7 @@
 # Particle Life Simulation
 
+![img](./life.png)
+
 A GPU-accelerated particle simulation where particles interact based on attraction/repulsion rules defined by their types. This project demonstrates high-performance simulation using Compute Shaders and efficient spatial partitioning.
 
 ## Application Description
