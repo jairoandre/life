@@ -36,3 +36,38 @@ This allows the simulation to support hundreds of thousands of particles at real
 ### Physics simulation
 -   **Euler Integration**: Simple semi-implicit Euler integration is used for updating positions based on velocity and acceleration.
 -   **Force Matrix**: A random or user-defined matrix defining the interaction strength between every pair of particle types.
+
+## Usage
+
+### Installation
+
+1.  Clone the repository.
+2.  Install the required dependencies:
+    ```bash
+    pip install -r requirements.txt
+    ```
+
+### Running the Application
+
+Run the main script using Python:
+```bash
+python main.py
+```
+
+### Controls
+
+| Key / Action | Function |
+| :--- | :--- |
+| **Mouse Drag** | Pan the view |
+| **Mouse Wheel** | Zoom in / out |
+| **P** | Pause / Resume simulation |
+| **A** | Randomize attraction/repulsion forces |
+| **C** | Randomize particle colors |
+| **R** | Reset zoom and camera position |
+| **S** | Save current configuration (params, forces, colors) to JSON |
+| **L** | Load configuration from JSON |
+| **Hold X** | spawns particles |
+| **Hold Z** | remove particles |
+| **Hold UP** | Increase global force strength |
+| **Hold DOWN** | Decrease global force strength |
+
