@@ -15,8 +15,11 @@ from utils.ui import UIManager, Slider, Switch
 
 os.environ["SDL_WINDOWS_DPI_AWARENESS"] = "permonitorv2"
 
-WIDTH = 1920
-HEIGHT = 1080
+#WIDTH = 1920
+#HEIGHT = 1080
+
+HEIGHT = 960
+WIDTH = 540
 
 WHITE = (255, 255, 255)
 BLACK = (0, 0, 0)
@@ -311,6 +314,8 @@ class Scene:
         self.base_type_colors = np.random.rand(self.num_types).astype("f4")
         colors = np.array([self.base_type_colors[t] for t in self.types]).astype("f4")
         self.colors_buffer.write(colors.tobytes())
+        self.types = np.random.choice(range(self.num_types), size=(MAX_NUM_PARTICLES)).astype("i4")
+        self.types_buffer.write(self.types.tobytes())
         
     def save_config(self):
         root = tk.Tk()
@@ -329,7 +334,8 @@ class Scene:
                     "rate": float(self.slider_friction.value), 
                     "dt": float(self.dt)
                 },
-                "num_types": int(self.num_types)
+                "num_types": int(self.num_types),
+                "num_particles": int(self.num_particles),
             },
             "force_matrix": self.force_matrix.tolist(),
             "base_type_colors": self.base_type_colors.tolist()
@@ -361,22 +367,21 @@ class Scene:
         self.slider_friction.value = params["friction_values"]["rate"]
         self.slider_dt.value = params["friction_values"]["dt"]
         
-        # Force Matrix
-        self.force_matrix = np.array(data["force_matrix"], dtype="f4")
         self.num_types = params["num_types"]
-        
-        self.force_texture.write(self.force_matrix.tobytes())
+        self.num_particles = params["num_particles"]
+        self.types = np.random.choice(range(self.num_types), size=(MAX_NUM_PARTICLES)).astype("i4")
+        self.types_buffer.write(self.types.tobytes())
+
+        # Force Matrix
+        force_matrix_arr = np.array(data["force_matrix"], dtype="f4")
+        self.force_matrix = force_matrix_arr.reshape((self.num_types, self.num_types))
+        self.apply_force_matrix()
         
         # Colors
         self.base_type_colors = np.array(data["base_type_colors"], dtype="f4")
         
-        # Re-generate particle colors for *current* types
-        # Reading types buffer
-        types_data = self.types_buffer.read(size=self.num_particles * 4)
-        types = np.frombuffer(types_data, dtype="i4")
-        
         # Map to new colors
-        colors = np.array([self.base_type_colors[t] for t in types]).astype("f4")
+        colors = np.array([self.base_type_colors[t] for t in self.types]).astype("f4")
         self.colors_buffer.write(colors.tobytes())
         
         print(f"Loaded config from {filename}")
@@ -488,7 +493,7 @@ class Scene:
         self.quad_vao.render(moderngl.TRIANGLE_STRIP)
         
         # Draw FPS
-        pygame.display.set_caption(f"Particle Life - FPS: {self.clock.get_fps():.2f} - Particles: {self.num_particles}")
+        pygame.display.set_caption(f"Particle Life - FPS: {self.clock.get_fps():.2f} - Particles: {self.num_particles} - Types: {self.num_types}")
         self.clock.tick()
 
         pygame.display.flip()
