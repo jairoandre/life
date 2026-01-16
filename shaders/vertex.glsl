@@ -24,6 +24,6 @@ void main() {
     repeated *= zoom;
 
     gl_Position = vec4(repeated, 0.0, 1.0);
-    gl_PointSize = 2.0 * zoom;
+    gl_PointSize = 1.0 * zoom;
     frag_color = hsv2rgb(in_color);
 }

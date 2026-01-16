@@ -33,6 +33,7 @@ BETA = 0.15
 FRICTION_RATE = 0.040
 DT = 0.005
 ZOOM_FACTOR = 0.1
+MIN_R_MAX = 0.1
 
 # SHADER PARAMS
 GROUP_SIZE = 64
@@ -190,7 +191,7 @@ class Scene:
 
     def update_simulation_params(self):
         # Recalculate R_MAX based on user formula
-        self.r_max = min(0.1, 1000.0 / self.num_particles) if self.num_particles > 0 else 0.1
+        self.r_max = min(MIN_R_MAX, 1000.0 / self.num_particles) if self.num_particles > 0 else MIN_R_MAX
         
         # Recalculate Grid
         self.grid_cell_size = self.r_max
@@ -541,12 +542,12 @@ class Scene:
                         if slider.dragging:
                             slider_dragging = True
                             break
-                    if event.button == 1 and not slider_dragging:
+                    if event.button == 2 and not slider_dragging:
                         self.dragging = True
                         x, y = event.pos
                         self.previous_pos = np.array([x, y])
                 elif event.type == pygame.MOUSEBUTTONUP:
-                    if event.button == 1:
+                    if event.button == 2:
                         self.dragging = False
                 elif event.type == pygame.MOUSEMOTION:
                    if self.dragging:
