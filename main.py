@@ -34,6 +34,7 @@ FRICTION_RATE = 0.040
 DT = 0.005
 ZOOM_FACTOR = 0.1
 MIN_R_MAX = 0.1
+DEFAULT_POINT_RADIUS = 2.0
 
 # SHADER PARAMS
 GROUP_SIZE = 64
@@ -58,6 +59,7 @@ class Scene:
         self.dragging = False
         self.offset = np.array([0.0, 0.0])
         gl.glEnable(gl.GL_PROGRAM_POINT_SIZE)
+        gl.glEnable(gl.GL_POINT_SPRITE)
         
         # UI Setup
         self.ui_manager = UIManager(WIDTH, HEIGHT)
@@ -102,6 +104,8 @@ class Scene:
 
         self.program["zoom"] = self.zoom
         self.program["offset"] = self.offset
+        self.point_radius = DEFAULT_POINT_RADIUS
+        self.program["point_radius"] = self.point_radius
 
         # Compute Shaders
         self.compute_shader = self.ctx.compute_shader(load_shader("compute_force.glsl"))
@@ -286,13 +290,17 @@ class Scene:
         self.slider_glow = Slider(100, 170, 120, 20, 0.0, 30.0, 3.0, "Intensity")
         self.ui_manager.add_slider(self.slider_glow)
 
+        # PARTICLE RADIUS
+        self.slider_radius = Slider(20, 220, 200, 20, 0.5, 10.0, DEFAULT_POINT_RADIUS, "Radius")
+        self.ui_manager.add_slider(self.slider_radius)
+
     def update_compute_shader_uniforms(self):
         # Read from UI
         self.beta = self.slider_beta.value
         f_rate = self.slider_friction.value
         self.dt = self.slider_dt.value
         
-        self.friction = np.power(0.5, self.dt / f_rate, dtype="f4")
+        self.friction = np.power(0.5, f_rate, dtype="f4")
 
         self.compute_shader["beta"] = float(self.beta)
         # self.compute_shader["r_max"] = self.r_max # R_max controlled by particle logic
@@ -301,7 +309,8 @@ class Scene:
 
     def gen_force_matrix(self):
         matrix_size = (self.num_types, self.num_types)
-        self.force_matrix = np.random.uniform(-1.0, 1.0, matrix_size).astype("f4")
+        force_const = 0.5
+        self.force_matrix = np.random.uniform(-force_const, force_const, matrix_size).astype("f4")
         self.apply_force_matrix()
     
     def apply_force_matrix(self, force = 0.0):
@@ -420,7 +429,13 @@ class Scene:
             # Outputs: pos_out (4), velocities (2)
             self.compute_shader.run(self.x_wg)
 
+            self.compute_shader.run(self.x_wg)
+
             self.use_first_buffer_set = not self.use_first_buffer_set
+
+        # Update Radius Uniform from Slider
+        self.point_radius = self.slider_radius.value
+        self.program["point_radius"] = self.point_radius
 
 
 
