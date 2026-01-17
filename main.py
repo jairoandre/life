@@ -29,12 +29,13 @@ BLACK = (0, 0, 0)
 INITIAL_NUM_PARTICLES = 1_000 
 MAX_NUM_PARTICLES = 200_000
 NUM_TYPE_OF_PARTICLES = 3
-BETA = 0.15 
+BETA = 0.5 
 FRICTION_RATE = 0.040
 DT = 0.005
 ZOOM_FACTOR = 0.1
 MIN_R_MAX = 0.1
 DEFAULT_POINT_RADIUS = 2.0
+MAX_NUM_TYPES = 16
 
 # SHADER PARAMS
 GROUP_SIZE = 64
@@ -287,7 +288,7 @@ class Scene:
         self.ui_manager.add_switch(self.switch_glow)
         
         # GLOW INTENSITY
-        self.slider_glow = Slider(100, 170, 120, 20, 0.0, 30.0, 3.0, "Intensity")
+        self.slider_glow = Slider(100, 170, 120, 20, 0.0, 4.5, 3.0, "Intensity")
         self.ui_manager.add_slider(self.slider_glow)
 
         # PARTICLE RADIUS
@@ -324,8 +325,20 @@ class Scene:
         self.base_type_colors = np.random.rand(self.num_types).astype("f4")
         colors = np.array([self.base_type_colors[t] for t in self.types]).astype("f4")
         self.colors_buffer.write(colors.tobytes())
+
+    def change_colors(self, add=True):
+        if add:
+            self.num_types += 1
+            if self.num_types > MAX_NUM_TYPES:
+                self.num_types = MAX_NUM_TYPES
+        else:
+            self.num_types -= 1
+            if self.num_types < 1:
+                self.num_types = 1
         self.types = np.random.choice(range(self.num_types), size=(MAX_NUM_PARTICLES)).astype("i4")
         self.types_buffer.write(self.types.tobytes())
+        self.gen_colors()
+        self.gen_force_matrix()
         
     def save_config(self):
         root = tk.Tk()
@@ -557,12 +570,12 @@ class Scene:
                         if slider.dragging:
                             slider_dragging = True
                             break
-                    if event.button == 2 and not slider_dragging:
+                    if event.button == 3 and not slider_dragging:
                         self.dragging = True
                         x, y = event.pos
                         self.previous_pos = np.array([x, y])
                 elif event.type == pygame.MOUSEBUTTONUP:
-                    if event.button == 2:
+                    if event.button == 3:
                         self.dragging = False
                 elif event.type == pygame.MOUSEMOTION:
                    if self.dragging:
@@ -598,17 +611,9 @@ class Scene:
                     elif event.key == pygame.K_DOWN:
                         self.decrease_force = True
                     elif event.key == pygame.K_RIGHT:
-                        self.num_types = min(self.num_types + 1, 8)
-                        self.types = np.random.randint(0, self.num_types, self.num_particles)
-                        self.types_buffer.write(self.types.tobytes())
-                        self.gen_colors()
-                        self.gen_force_matrix()
+                        self.change_colors(add=True)
                     elif event.key == pygame.K_LEFT:
-                        self.num_types = max(self.num_types - 1, 2)
-                        self.types = np.random.randint(0, self.num_types, self.num_particles)
-                        self.types_buffer.write(self.types.tobytes())
-                        self.gen_colors()
-                        self.gen_force_matrix()
+                        self.change_colors(add=False)
                 elif event.type == pygame.KEYUP:
                     if event.key == pygame.K_x:
                         self.adding_particles = False
